@@ -1,4 +1,6 @@
 import os
+import json
+from base64 import b64decode
 from datetime import datetime
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
@@ -9,6 +11,7 @@ from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from ics.attendee import Attendee
 from ics.organizer import Organizer
+from googleapiclient.discovery import build
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.events.readonly', 'https://www.googleapis.com/auth/calendar.readonly']
 API_ENDPOINT = 'https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events?timeMin={time_min}&timeMax={time_max}&maxResults={max_results}'
@@ -23,6 +26,20 @@ CAL_NAME = os.getenv('CALDAV_SERVER_CALENDAR_NAME')
 APIQUERY_DT_FMT = '%Y-%m-%dT%H:%M:%S-09:00'  # 2019-08-01T00:00:00-09:00
 APIQUERY_MAX_RESULTS = int(os.getenv('APIQUERY_MAX_RESULTS', default=1000))
 RANGE_OFFSET_MONTHS = int(os.getenv('RANGE_OFFSET_MONTHS', default=2))
+
+
+def decrypt_credectial():
+    '''Get decrypted credentials.json from KMS'''
+    kms_client = build('cloudkms', 'v1')
+    key_path = 'projects/{pj}/locations/{loc}/keyRings/{key_ring}/cryptoKeys/{key}'.format(
+        pj=str(os.getenv('GOOGLE_PJ')),
+        loc=str(os.getenv('GOOGLE_KMS_LOC')),
+        key_ring=str(os.getenv('GOOGLE_KMS_KEYRING')),
+        key=str(os.getenv('GOOGLE_KMS_KEY')))
+    crypto_keys = kms_client.projects().locations().keyRings().cryptoKeys()
+    kms_request = crypto_keys.decrypt(name=key_path, body={'ciphertext': str(os.getenv('GOOGLE_ENCRYPTED_CRED'))})
+    kms_response = kms_request.execute()
+    return json.loads(b64decode(kms_response['plaintext'].encode('ascii')))
 
 
 def conv_arrow(datestr):
@@ -83,8 +100,8 @@ def generate_ics(events, timezone='Asia/Tokyo'):
 
 def get_gcals():
     '''Get Google Calendar API event Responces'''
-    creds = service_account.Credentials.from_service_account_file(
-        CREDENTIAL_FILE, scopes=SCOPES).with_subject(SUBJECT)
+    creds = service_account.Credentials.from_service_account_info(
+        decrypt_credectial(), scopes=SCOPES).with_subject(SUBJECT)
     authed_session = AuthorizedSession(creds)
     time_min = datetime.utcnow() + relativedelta(months=-RANGE_OFFSET_MONTHS)
     time_max = datetime.utcnow() + relativedelta(months=+RANGE_OFFSET_MONTHS)
